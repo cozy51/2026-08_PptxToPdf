@@ -11,6 +11,12 @@ import pythoncom
 import win32com.client
 
 
+# COMへ渡す値はPythonのboolではなく、OfficeのMsoTriStateと同じ整数値を
+# 明示的に使用する。環境によっては動的COMディスパッチがboolやキーワード
+# 引数を正しく変換できず、"The Python instance can not be converted to a COM
+# object" になるため。
+MSO_TRUE = -1
+MSO_FALSE = 0
 PDF_FORMAT = 2  # PowerPoint: ppFixedFormatTypePDF
 
 
@@ -128,18 +134,28 @@ class PptxToPdfApp:
 
             for pptx_path in paths:
                 presentation = None
+                current_step = "ファイルの確認"
                 try:
                     if not pptx_path.is_file():
                         raise FileNotFoundError("ファイルが見つかりません")
 
                     pdf_path = pptx_path.with_suffix(".pdf")
+                    current_step = "PowerPointで開く"
+                    # pywin32の動的ディスパッチでの互換性を高めるため、COM
+                    # メソッドにはキーワード引数やPythonのboolを渡さない。
                     presentation = powerpoint.Presentations.Open(
-                        str(pptx_path), ReadOnly=True, Untitled=False, WithWindow=False
+                        str(pptx_path), MSO_TRUE, MSO_FALSE, MSO_FALSE
                     )
+                    current_step = "PDFとして書き出す"
                     presentation.ExportAsFixedFormat(str(pdf_path), PDF_FORMAT)
                     self.events.put(("log", f"成功: {pptx_path.name} → {pdf_path.name}"))
                 except Exception as exc:
-                    self.events.put(("log", f"失敗: {pptx_path.name} ({exc})"))
+                    self.events.put(
+                        (
+                            "log",
+                            f"失敗 [{current_step}]: {pptx_path.name} ({exc})",
+                        )
+                    )
                 finally:
                     if presentation is not None:
                         try:
