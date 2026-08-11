@@ -9,6 +9,7 @@ from tkinter import filedialog, messagebox, ttk
 
 import pythoncom
 import win32com.client
+from tkinterdnd2 import DND_FILES, TkinterDnD
 
 
 # COMへ渡す値はPythonのboolではなく、OfficeのMsoTriStateと同じ整数値を
@@ -33,6 +34,7 @@ class PptxToPdfApp:
         self.converting = False
 
         self._build_ui()
+        self._configure_drag_and_drop()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def _build_ui(self) -> None:
@@ -42,10 +44,15 @@ class PptxToPdfApp:
         frame.rowconfigure(1, weight=1)
         frame.rowconfigure(4, weight=1)
 
+        controls = ttk.Frame(frame)
+        controls.grid(row=0, column=0, sticky="ew", pady=(0, 8))
         self.select_button = ttk.Button(
-            frame, text="PPTXファイルを選択", command=self._select_files
+            controls, text="PPTXファイルを選択", command=self._select_files
         )
-        self.select_button.grid(row=0, column=0, sticky=tk.W, pady=(0, 8))
+        self.select_button.pack(side=tk.LEFT)
+        ttk.Label(controls, text="  またはPPTXファイルを下の一覧へドラッグ＆ドロップ").pack(
+            side=tk.LEFT
+        )
 
         files_frame = ttk.LabelFrame(frame, text="選択したファイル", padding=6)
         files_frame.grid(row=1, column=0, sticky="nsew")
@@ -77,6 +84,47 @@ class PptxToPdfApp:
         log_scroll.grid(row=0, column=1, sticky="ns")
         self.log.configure(yscrollcommand=log_scroll.set)
 
+    def _configure_drag_and_drop(self) -> None:
+        self.file_list.drop_target_register(DND_FILES)
+        self.file_list.dnd_bind("<<Drop>>", self._handle_drop)
+
+    def _handle_drop(self, event: tk.Event) -> str:
+        if self.converting:
+            self._write_log("変換中はファイルを追加できません。")
+            return "break"
+
+        # Tclのsplitlistを使用すると、空白や日本語を含み波括弧で囲まれた
+        # Windowsパスも、文字列を手作業で分割せず安全に取得できる。
+        dropped_names = self.root.tk.splitlist(event.data)
+        pptx_files = [
+            Path(name).resolve()
+            for name in dropped_names
+            if Path(name).is_file() and Path(name).suffix.lower() == ".pptx"
+        ]
+
+        if not pptx_files:
+            self._write_log("ドロップされた項目にPPTXファイルがありません。")
+            return "break"
+
+        self._add_files(pptx_files)
+        self._write_log(f"ドラッグ＆ドロップで{len(pptx_files)}件を追加しました。")
+        return "break"
+
+    def _add_files(self, paths: list[Path], *, replace: bool = False) -> None:
+        if replace:
+            self.selected_files = []
+
+        known_paths = {str(path).casefold() for path in self.selected_files}
+        for path in paths:
+            path_key = str(path).casefold()
+            if path_key not in known_paths:
+                self.selected_files.append(path)
+                known_paths.add(path_key)
+
+        self.file_list.delete(0, tk.END)
+        for path in self.selected_files:
+            self.file_list.insert(tk.END, str(path))
+
     def _select_files(self) -> None:
         names = filedialog.askopenfilenames(
             title="PPTXファイルを選択",
@@ -85,10 +133,7 @@ class PptxToPdfApp:
         if not names:
             return
 
-        self.selected_files = [Path(name).resolve() for name in names]
-        self.file_list.delete(0, tk.END)
-        for path in self.selected_files:
-            self.file_list.insert(tk.END, str(path))
+        self._add_files([Path(name).resolve() for name in names], replace=True)
         self._write_log(f"{len(self.selected_files)} 件のファイルを選択しました。")
 
     def _start_conversion(self) -> None:
@@ -231,7 +276,7 @@ class PptxToPdfApp:
 
 
 def main() -> None:
-    root = tk.Tk()
+    root = TkinterDnD.Tk()
     PptxToPdfApp(root)
     root.mainloop()
 
