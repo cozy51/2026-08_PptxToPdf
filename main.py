@@ -20,12 +20,14 @@ MSO_TRUE = -1
 MSO_FALSE = 0
 PDF_FORMAT = 2  # PowerPoint: ppFixedFormatTypePDF
 SAVE_AS_PDF = 32  # PowerPoint: ppSaveAsPDF
+WORD_PDF_FORMAT = 17  # Word: wdExportFormatPDF / wdFormatPDF
+SUPPORTED_EXTENSIONS = {".pptx", ".doc", ".docx"}
 
 
 class PptxToPdfApp:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
-        self.root.title("PPTX to PDF")
+        self.root.title("Office to PDF")
         self.root.geometry("760x520")
         self.root.minsize(600, 420)
 
@@ -47,12 +49,12 @@ class PptxToPdfApp:
         controls = ttk.Frame(frame)
         controls.grid(row=0, column=0, sticky="ew", pady=(0, 8))
         self.select_button = ttk.Button(
-            controls, text="PPTXファイルを選択", command=self._select_files
+            controls, text="Officeファイルを選択", command=self._select_files
         )
         self.select_button.pack(side=tk.LEFT)
-        ttk.Label(controls, text="  またはPPTXファイルを下の一覧へドラッグ＆ドロップ").pack(
-            side=tk.LEFT
-        )
+        ttk.Label(
+            controls, text="  またはPPTX・Wordファイルを下の一覧へドラッグ＆ドロップ"
+        ).pack(side=tk.LEFT)
 
         files_frame = ttk.LabelFrame(frame, text="選択したファイル", padding=6)
         files_frame.grid(row=1, column=0, sticky="nsew")
@@ -96,18 +98,19 @@ class PptxToPdfApp:
         # Tclのsplitlistを使用すると、空白や日本語を含み波括弧で囲まれた
         # Windowsパスも、文字列を手作業で分割せず安全に取得できる。
         dropped_names = self.root.tk.splitlist(event.data)
-        pptx_files = [
+        office_files = [
             Path(name).resolve()
             for name in dropped_names
-            if Path(name).is_file() and Path(name).suffix.lower() == ".pptx"
+            if Path(name).is_file()
+            and Path(name).suffix.lower() in SUPPORTED_EXTENSIONS
         ]
 
-        if not pptx_files:
-            self._write_log("ドロップされた項目にPPTXファイルがありません。")
+        if not office_files:
+            self._write_log("ドロップされた項目に対応するOfficeファイルがありません。")
             return "break"
 
-        self._add_files(pptx_files)
-        self._write_log(f"ドラッグ＆ドロップで{len(pptx_files)}件を追加しました。")
+        self._add_files(office_files)
+        self._write_log(f"ドラッグ＆ドロップで{len(office_files)}件を追加しました。")
         return "break"
 
     def _add_files(self, paths: list[Path], *, replace: bool = False) -> None:
@@ -127,8 +130,12 @@ class PptxToPdfApp:
 
     def _select_files(self) -> None:
         names = filedialog.askopenfilenames(
-            title="PPTXファイルを選択",
-            filetypes=[("PowerPoint プレゼンテーション", "*.pptx")],
+            title="Officeファイルを選択",
+            filetypes=[
+                ("対応するOfficeファイル", "*.pptx *.doc *.docx"),
+                ("PowerPoint プレゼンテーション", "*.pptx"),
+                ("Word 文書", "*.doc *.docx"),
+            ],
         )
         if not names:
             return
@@ -138,7 +145,9 @@ class PptxToPdfApp:
 
     def _start_conversion(self) -> None:
         if not self.selected_files:
-            messagebox.showwarning("ファイル未選択", "PPTXファイルを選択してください。")
+            messagebox.showwarning(
+                "ファイル未選択", "PPTXまたはWordファイルを選択してください。"
+            )
             return
 
         files_to_convert: list[Path] = []
@@ -174,68 +183,46 @@ class PptxToPdfApp:
 
     def _convert_files(self, paths: list[Path]) -> None:
         powerpoint = None
+        word = None
         pythoncom.CoInitialize()
         try:
-            powerpoint = win32com.client.DispatchEx("PowerPoint.Application")
-
-            for pptx_path in paths:
-                presentation = None
+            for source_path in paths:
                 current_step = "ファイルの確認"
                 try:
-                    if not pptx_path.is_file():
+                    if not source_path.is_file():
                         raise FileNotFoundError("ファイルが見つかりません")
 
-                    pdf_path = pptx_path.with_suffix(".pdf")
-                    current_step = "PowerPointで開く"
-                    # pywin32の動的ディスパッチでの互換性を高めるため、COM
-                    # メソッドにはキーワード引数やPythonのboolを渡さない。
-                    presentation = powerpoint.Presentations.Open(
-                        str(pptx_path), MSO_TRUE, MSO_FALSE, MSO_FALSE
-                    )
-                    current_step = "PDFとして書き出す"
-                    try:
-                        presentation.ExportAsFixedFormat(str(pdf_path), PDF_FORMAT)
-                    except Exception as export_error:
-                        # 一部のPowerPoint/pywin32の組み合わせでは、
-                        # ExportAsFixedFormatの省略可能なCOM引数の変換に失敗する。
-                        # その場合だけ、PowerPoint標準のPDF形式でSaveAsする。
-                        self.events.put(
-                            (
-                                "log",
-                                "ExportAsFixedFormatを使用できなかったため、"
-                                f"SaveAsで再試行します ({export_error})",
+                    extension = source_path.suffix.lower()
+                    if extension == ".pptx":
+                        current_step = "PowerPointを起動"
+                        if powerpoint is None:
+                            powerpoint = win32com.client.DispatchEx(
+                                "PowerPoint.Application"
                             )
-                        )
-                        current_step = "SaveAsでPDFとして書き出す"
-                        try:
-                            presentation.SaveAs(str(pdf_path), SAVE_AS_PDF)
-                        except Exception as save_as_error:
-                            raise RuntimeError(
-                                "ExportAsFixedFormatとSaveAsの両方に失敗しました。"
-                                f" ExportAsFixedFormat: {export_error};"
-                                f" SaveAs: {save_as_error}"
-                            ) from save_as_error
-                    self.events.put(("log", f"成功: {pptx_path.name} → {pdf_path.name}"))
+                        self._convert_powerpoint_file(powerpoint, source_path)
+                    elif extension in {".doc", ".docx"}:
+                        current_step = "Wordを起動"
+                        if word is None:
+                            word = win32com.client.DispatchEx("Word.Application")
+                            word.DisplayAlerts = MSO_FALSE
+                        self._convert_word_file(word, source_path)
+                    else:
+                        raise ValueError("対応していない拡張子です")
                 except Exception as exc:
                     self.events.put(
                         (
                             "log",
-                            f"失敗 [{current_step}]: {pptx_path.name} ({exc})",
+                            f"失敗 [{current_step}]: {source_path.name} ({exc})",
                         )
                     )
-                finally:
-                    if presentation is not None:
-                        try:
-                            presentation.Close()
-                        except Exception as exc:
-                            self.events.put(
-                                ("log", f"警告: {pptx_path.name} を閉じられませんでした ({exc})")
-                            )
-                        finally:
-                            presentation = None
-        except Exception as exc:
-            self.events.put(("log", f"PowerPointを起動できませんでした: {exc}"))
         finally:
+            if word is not None:
+                try:
+                    word.Quit()
+                except Exception as exc:
+                    self.events.put(("log", f"Wordの終了時にエラーが発生しました: {exc}"))
+                finally:
+                    word = None
             if powerpoint is not None:
                 try:
                     powerpoint.Quit()
@@ -246,6 +233,76 @@ class PptxToPdfApp:
             gc.collect()
             pythoncom.CoUninitialize()
             self.events.put(("done", "すべての処理が終了しました。"))
+
+    def _convert_powerpoint_file(self, powerpoint: object, source_path: Path) -> None:
+        presentation = None
+        pdf_path = source_path.with_suffix(".pdf")
+        try:
+            # COMメソッドにはキーワード引数やPythonのboolを渡さない。
+            presentation = powerpoint.Presentations.Open(
+                str(source_path), MSO_TRUE, MSO_FALSE, MSO_FALSE
+            )
+            try:
+                presentation.ExportAsFixedFormat(str(pdf_path), PDF_FORMAT)
+            except Exception as export_error:
+                self._log_export_retry(export_error)
+                try:
+                    presentation.SaveAs(str(pdf_path), SAVE_AS_PDF)
+                except Exception as save_as_error:
+                    self._raise_export_error(export_error, save_as_error)
+            self.events.put(("log", f"成功: {source_path.name} → {pdf_path.name}"))
+        finally:
+            if presentation is not None:
+                try:
+                    presentation.Close()
+                except Exception as exc:
+                    self.events.put(
+                        ("log", f"警告: {source_path.name} を閉じられませんでした ({exc})")
+                    )
+
+    def _convert_word_file(self, word: object, source_path: Path) -> None:
+        document = None
+        pdf_path = source_path.with_suffix(".pdf")
+        try:
+            # ConfirmConversions=False, ReadOnly=True, AddToRecentFiles=False
+            document = word.Documents.Open(
+                str(source_path), MSO_FALSE, MSO_TRUE, MSO_FALSE
+            )
+            try:
+                document.ExportAsFixedFormat(str(pdf_path), WORD_PDF_FORMAT)
+            except Exception as export_error:
+                self._log_export_retry(export_error)
+                try:
+                    document.SaveAs2(str(pdf_path), WORD_PDF_FORMAT)
+                except Exception as save_as_error:
+                    self._raise_export_error(export_error, save_as_error)
+            self.events.put(("log", f"成功: {source_path.name} → {pdf_path.name}"))
+        finally:
+            if document is not None:
+                try:
+                    document.Close(MSO_FALSE)
+                except Exception as exc:
+                    self.events.put(
+                        ("log", f"警告: {source_path.name} を閉じられませんでした ({exc})")
+                    )
+
+    def _log_export_retry(self, export_error: Exception) -> None:
+        self.events.put(
+            (
+                "log",
+                "ExportAsFixedFormatを使用できなかったため、"
+                f"SaveAsで再試行します ({export_error})",
+            )
+        )
+
+    @staticmethod
+    def _raise_export_error(
+        export_error: Exception, save_as_error: Exception
+    ) -> None:
+        raise RuntimeError(
+            "ExportAsFixedFormatとSaveAsの両方に失敗しました。"
+            f" ExportAsFixedFormat: {export_error}; SaveAs: {save_as_error}"
+        ) from save_as_error
 
     def _process_events(self) -> None:
         try:
