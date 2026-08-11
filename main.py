@@ -46,12 +46,14 @@ class PptxToPdfApp:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         self.root.title("Office to PDF")
-        self.root.geometry("760x520")
-        self.root.minsize(600, 420)
+        self.root.geometry("760x680")
+        self.root.minsize(600, 560)
 
         self.selected_files: list[Path] = []
+        self.completed_files: list[Path] = []
         self.events: queue.Queue[tuple[str, str]] = queue.Queue()
         self.converting = False
+        self.optimize_excel_var = tk.BooleanVar(value=False)
 
         self._build_ui()
         self._configure_drag_and_drop()
@@ -62,7 +64,8 @@ class PptxToPdfApp:
         frame.pack(fill=tk.BOTH, expand=True)
         frame.columnconfigure(0, weight=1)
         frame.rowconfigure(1, weight=1)
-        frame.rowconfigure(4, weight=1)
+        frame.rowconfigure(2, weight=1)
+        frame.rowconfigure(6, weight=1)
 
         controls = ttk.Frame(frame)
         controls.grid(row=0, column=0, sticky="ew", pady=(0, 8))
@@ -93,14 +96,42 @@ class PptxToPdfApp:
         )
         self.remove_button.grid(row=1, column=0, sticky=tk.W, pady=(6, 0))
 
+        completed_frame = ttk.LabelFrame(frame, text="処理が完了したファイル", padding=6)
+        completed_frame.grid(row=2, column=0, sticky="nsew", pady=(8, 0))
+        completed_frame.columnconfigure(0, weight=1)
+        completed_frame.rowconfigure(0, weight=1)
+
+        self.completed_list = tk.Listbox(completed_frame, selectmode=tk.EXTENDED)
+        self.completed_list.grid(row=0, column=0, sticky="nsew")
+        completed_scroll = ttk.Scrollbar(
+            completed_frame, orient=tk.VERTICAL, command=self.completed_list.yview
+        )
+        completed_scroll.grid(row=0, column=1, sticky="ns")
+        self.completed_list.configure(yscrollcommand=completed_scroll.set)
+        self.completed_list.bind("<Delete>", self._restore_completed_files)
+
+        self.restore_button = ttk.Button(
+            completed_frame,
+            text="選択項目を未処理リストへ戻す",
+            command=self._restore_completed_files,
+        )
+        self.restore_button.grid(row=1, column=0, sticky=tk.W, pady=(6, 0))
+
         self.convert_button = ttk.Button(
             frame, text="PDFに変換", command=self._start_conversion
         )
-        self.convert_button.grid(row=2, column=0, sticky=tk.W, pady=10)
+        self.convert_button.grid(row=3, column=0, sticky=tk.W, pady=(10, 4))
 
-        ttk.Label(frame, text="処理結果ログ").grid(row=3, column=0, sticky=tk.W)
+        self.optimize_excel_check = ttk.Checkbutton(
+            frame,
+            text="Excelの印刷範囲・用紙方向・倍率をPDF化前に最適化する",
+            variable=self.optimize_excel_var,
+        )
+        self.optimize_excel_check.grid(row=4, column=0, sticky=tk.W, pady=(0, 10))
+
+        ttk.Label(frame, text="処理結果ログ").grid(row=5, column=0, sticky=tk.W)
         log_frame = ttk.Frame(frame)
-        log_frame.grid(row=4, column=0, sticky="nsew", pady=(4, 0))
+        log_frame.grid(row=6, column=0, sticky="nsew", pady=(4, 0))
         log_frame.columnconfigure(0, weight=1)
         log_frame.rowconfigure(0, weight=1)
 
@@ -141,7 +172,10 @@ class PptxToPdfApp:
         if replace:
             self.selected_files = []
 
-        known_paths = {str(path).casefold() for path in self.selected_files}
+        known_paths = {
+            str(path).casefold()
+            for path in self.selected_files + self.completed_files
+        }
         for path in paths:
             path_key = str(path).casefold()
             if path_key not in known_paths:
@@ -168,6 +202,41 @@ class PptxToPdfApp:
 
         self._write_log(f"選択リストから{len(selected_indices)}件を削除しました。")
         return "break"
+
+    def _restore_completed_files(self, _event: tk.Event | None = None) -> str:
+        if self.converting:
+            self._write_log("変換中は完了したファイルを戻せません。")
+            return "break"
+
+        selected_indices = list(self.completed_list.curselection())
+        if not selected_indices:
+            self._write_log("未処理リストへ戻すファイルを選択してください。")
+            return "break"
+
+        restored = [self.completed_files[index] for index in selected_indices]
+        for index in reversed(selected_indices):
+            del self.completed_files[index]
+        self.selected_files.extend(restored)
+        self._refresh_file_lists()
+        self._write_log(f"未処理リストへ{len(restored)}件を戻しました。")
+        return "break"
+
+    def _mark_completed(self, source_path: Path) -> None:
+        source_key = str(source_path).casefold()
+        self.selected_files = [
+            path for path in self.selected_files if str(path).casefold() != source_key
+        ]
+        if all(str(path).casefold() != source_key for path in self.completed_files):
+            self.completed_files.append(source_path)
+        self._refresh_file_lists()
+
+    def _refresh_file_lists(self) -> None:
+        self.file_list.delete(0, tk.END)
+        for path in self.selected_files:
+            self.file_list.insert(tk.END, str(path))
+        self.completed_list.delete(0, tk.END)
+        for path in self.completed_files:
+            self.completed_list.insert(tk.END, str(path))
 
     def _select_files(self) -> None:
         names = filedialog.askopenfilenames(
@@ -218,16 +287,20 @@ class PptxToPdfApp:
         self.converting = True
         self.select_button.configure(state=tk.DISABLED)
         self.remove_button.configure(state=tk.DISABLED)
+        self.restore_button.configure(state=tk.DISABLED)
+        self.optimize_excel_check.configure(state=tk.DISABLED)
         self.convert_button.configure(state=tk.DISABLED)
         self._write_log("変換を開始します。")
 
         worker = threading.Thread(
-            target=self._convert_files, args=(files_to_convert,), daemon=False
+            target=self._convert_files,
+            args=(files_to_convert, self.optimize_excel_var.get()),
+            daemon=False,
         )
         worker.start()
         self.root.after(100, self._process_events)
 
-    def _convert_files(self, paths: list[Path]) -> None:
+    def _convert_files(self, paths: list[Path], optimize_excel: bool) -> None:
         powerpoint = None
         word = None
         excel = None
@@ -258,7 +331,7 @@ class PptxToPdfApp:
                         if excel is None:
                             excel = win32com.client.DispatchEx("Excel.Application")
                             excel.DisplayAlerts = MSO_FALSE
-                        self._convert_excel_file(excel, source_path)
+                        self._convert_excel_file(excel, source_path, optimize_excel)
                     else:
                         raise ValueError("対応していない拡張子です")
                 except Exception as exc:
@@ -310,7 +383,7 @@ class PptxToPdfApp:
                     presentation.SaveAs(str(pdf_path), SAVE_AS_PDF)
                 except Exception as save_as_error:
                     self._raise_export_error(export_error, save_as_error)
-            self.events.put(("log", f"成功: {source_path.name} → {pdf_path.name}"))
+            self.events.put(("success", str(source_path)))
         finally:
             if presentation is not None:
                 try:
@@ -336,7 +409,7 @@ class PptxToPdfApp:
                     document.SaveAs2(str(pdf_path), WORD_PDF_FORMAT)
                 except Exception as save_as_error:
                     self._raise_export_error(export_error, save_as_error)
-            self.events.put(("log", f"成功: {source_path.name} → {pdf_path.name}"))
+            self.events.put(("success", str(source_path)))
         finally:
             if document is not None:
                 try:
@@ -346,16 +419,21 @@ class PptxToPdfApp:
                         ("log", f"警告: {source_path.name} を閉じられませんでした ({exc})")
                     )
 
-    def _convert_excel_file(self, excel: object, source_path: Path) -> None:
+    def _convert_excel_file(
+        self, excel: object, source_path: Path, optimize_print_settings: bool
+    ) -> None:
         workbook = None
         pdf_path = source_path.with_suffix(".pdf")
         try:
             # UpdateLinks=False, ReadOnly=True。元のブックは変更しない。
             workbook = excel.Workbooks.Open(str(source_path), MSO_FALSE, MSO_TRUE)
-            self._optimize_excel_print_settings(workbook)
+            if optimize_print_settings:
+                self._optimize_excel_print_settings(workbook)
+            else:
+                self.events.put(("log", "Excelの印刷設定の最適化を省略しました。"))
             # ExcelはPowerPoint/Wordと引数の順序が異なり、形式が先になる。
             workbook.ExportAsFixedFormat(EXCEL_PDF_FORMAT, str(pdf_path))
-            self.events.put(("log", f"成功: {source_path.name} → {pdf_path.name}"))
+            self.events.put(("success", str(source_path)))
         finally:
             if workbook is not None:
                 try:
@@ -505,11 +583,20 @@ class PptxToPdfApp:
         try:
             while True:
                 event, message = self.events.get_nowait()
-                self._write_log(message)
+                if event == "success":
+                    source_path = Path(message)
+                    self._mark_completed(source_path)
+                    self._write_log(
+                        f"成功: {source_path.name} → {source_path.with_suffix('.pdf').name}"
+                    )
+                else:
+                    self._write_log(message)
                 if event == "done":
                     self.converting = False
                     self.select_button.configure(state=tk.NORMAL)
                     self.remove_button.configure(state=tk.NORMAL)
+                    self.restore_button.configure(state=tk.NORMAL)
+                    self.optimize_excel_check.configure(state=tk.NORMAL)
                     self.convert_button.configure(state=tk.NORMAL)
         except queue.Empty:
             pass
