@@ -27,6 +27,10 @@ EXCEL_LANDSCAPE = 2  # Excel: xlLandscape
 EXCEL_A4 = 9  # Excel: xlPaperA4
 EXCEL_VISIBLE = -1  # Excel: xlSheetVisible
 LANDSCAPE_COLUMN_THRESHOLD = 8
+EXCEL_A4_PORTRAIT_WIDTH_POINTS = 595.28
+EXCEL_A4_LANDSCAPE_WIDTH_POINTS = 841.89
+EXCEL_DEFAULT_MARGIN_POINTS = 36.0
+EXCEL_MIN_ZOOM = 10
 SUPPORTED_EXTENSIONS = {
     ".pptx",
     ".doc",
@@ -374,20 +378,34 @@ class PptxToPdfApp:
                     continue
 
                 page_setup = worksheet.PageSetup
+                try:
+                    # 既存の手動改ページが残っているとFitToPagesWideより優先され、
+                    # 横方向が複数ページのままになるため、先に解除する。
+                    worksheet.ResetAllPageBreaks()
+                except Exception as exc:
+                    self.events.put(
+                        (
+                            "log",
+                            f"警告: シート「{worksheet.Name}」の既存改ページを解除"
+                            f"できませんでした。設定可能な範囲で続けます ({exc})",
+                        )
+                    )
+                orientation = (
+                    EXCEL_LANDSCAPE
+                    if used_range.Columns.Count > LANDSCAPE_COLUMN_THRESHOLD
+                    else EXCEL_PORTRAIT
+                )
+                zoom = self._calculate_excel_zoom(
+                    used_range.Width, page_setup, orientation, worksheet.Name
+                )
                 settings = (
                     ("PrintArea", used_range.Address, "印刷範囲"),
                     ("PaperSize", EXCEL_A4, "用紙サイズ(A4)"),
-                    (
-                        "Orientation",
-                        EXCEL_LANDSCAPE
-                        if used_range.Columns.Count > LANDSCAPE_COLUMN_THRESHOLD
-                        else EXCEL_PORTRAIT,
-                        "印刷方向",
-                    ),
-                    ("Zoom", MSO_FALSE, "拡大縮小率"),
-                    ("FitToPagesWide", 1, "横幅1ページ"),
-                    ("FitToPagesTall", MSO_FALSE, "縦方向自動改ページ"),
-                    ("CenterHorizontally", MSO_TRUE, "横中央配置"),
+                    ("Orientation", orientation, "印刷方向"),
+                    # Excel環境によってZoom=FalseとFitToPages*が1004エラーに
+                    # なるため、使用範囲の実寸から数値の倍率を計算する。
+                    ("Zoom", zoom, f"拡大縮小率({zoom}%)"),
+                    ("CenterHorizontally", True, "横中央配置"),
                 )
                 applied_settings = sum(
                     self._try_set_excel_page_property(
@@ -432,6 +450,38 @@ class PptxToPdfApp:
                 )
             )
             return 0
+
+    def _calculate_excel_zoom(
+        self,
+        content_width: float,
+        page_setup: object,
+        orientation: int,
+        sheet_name: str,
+    ) -> int:
+        page_width = (
+            EXCEL_A4_LANDSCAPE_WIDTH_POINTS
+            if orientation == EXCEL_LANDSCAPE
+            else EXCEL_A4_PORTRAIT_WIDTH_POINTS
+        )
+        try:
+            left_margin = float(page_setup.LeftMargin)
+            right_margin = float(page_setup.RightMargin)
+        except Exception:
+            left_margin = EXCEL_DEFAULT_MARGIN_POINTS
+            right_margin = EXCEL_DEFAULT_MARGIN_POINTS
+
+        printable_width = max(page_width - left_margin - right_margin, 1.0)
+        # 丸め誤差やプリンタードライバーの印刷不能領域を考慮して5%余裕を持つ。
+        required_zoom = int(printable_width / max(float(content_width), 1.0) * 95)
+        if required_zoom < EXCEL_MIN_ZOOM:
+            self.events.put(
+                (
+                    "log",
+                    f"警告: シート「{sheet_name}」は横幅が広いため、Excelの最小倍率"
+                    f"{EXCEL_MIN_ZOOM}%で出力します。横方向が複数ページになる場合があります。",
+                )
+            )
+        return max(EXCEL_MIN_ZOOM, min(required_zoom, 100))
 
     def _log_export_retry(self, export_error: Exception) -> None:
         self.events.put(
