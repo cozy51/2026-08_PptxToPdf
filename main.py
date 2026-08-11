@@ -18,6 +18,7 @@ import win32com.client
 MSO_TRUE = -1
 MSO_FALSE = 0
 PDF_FORMAT = 2  # PowerPoint: ppFixedFormatTypePDF
+SAVE_AS_PDF = 32  # PowerPoint: ppSaveAsPDF
 
 
 class PptxToPdfApp:
@@ -147,7 +148,28 @@ class PptxToPdfApp:
                         str(pptx_path), MSO_TRUE, MSO_FALSE, MSO_FALSE
                     )
                     current_step = "PDFとして書き出す"
-                    presentation.ExportAsFixedFormat(str(pdf_path), PDF_FORMAT)
+                    try:
+                        presentation.ExportAsFixedFormat(str(pdf_path), PDF_FORMAT)
+                    except Exception as export_error:
+                        # 一部のPowerPoint/pywin32の組み合わせでは、
+                        # ExportAsFixedFormatの省略可能なCOM引数の変換に失敗する。
+                        # その場合だけ、PowerPoint標準のPDF形式でSaveAsする。
+                        self.events.put(
+                            (
+                                "log",
+                                "ExportAsFixedFormatを使用できなかったため、"
+                                f"SaveAsで再試行します ({export_error})",
+                            )
+                        )
+                        current_step = "SaveAsでPDFとして書き出す"
+                        try:
+                            presentation.SaveAs(str(pdf_path), SAVE_AS_PDF)
+                        except Exception as save_as_error:
+                            raise RuntimeError(
+                                "ExportAsFixedFormatとSaveAsの両方に失敗しました。"
+                                f" ExportAsFixedFormat: {export_error};"
+                                f" SaveAs: {save_as_error}"
+                            ) from save_as_error
                     self.events.put(("log", f"成功: {pptx_path.name} → {pdf_path.name}"))
                 except Exception as exc:
                     self.events.put(
