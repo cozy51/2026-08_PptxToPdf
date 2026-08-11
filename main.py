@@ -22,6 +22,11 @@ PDF_FORMAT = 2  # PowerPoint: ppFixedFormatTypePDF
 SAVE_AS_PDF = 32  # PowerPoint: ppSaveAsPDF
 WORD_PDF_FORMAT = 17  # Word: wdExportFormatPDF / wdFormatPDF
 EXCEL_PDF_FORMAT = 0  # Excel: xlTypePDF
+EXCEL_PORTRAIT = 1  # Excel: xlPortrait
+EXCEL_LANDSCAPE = 2  # Excel: xlLandscape
+EXCEL_A4 = 9  # Excel: xlPaperA4
+EXCEL_VISIBLE = -1  # Excel: xlSheetVisible
+LANDSCAPE_COLUMN_THRESHOLD = 8
 SUPPORTED_EXTENSIONS = {
     ".pptx",
     ".doc",
@@ -77,6 +82,12 @@ class PptxToPdfApp:
         )
         files_scroll.grid(row=0, column=1, sticky="ns")
         self.file_list.configure(yscrollcommand=files_scroll.set)
+        self.file_list.bind("<Delete>", self._remove_selected_files)
+
+        self.remove_button = ttk.Button(
+            files_frame, text="選択項目を削除", command=self._remove_selected_files
+        )
+        self.remove_button.grid(row=1, column=0, sticky=tk.W, pady=(6, 0))
 
         self.convert_button = ttk.Button(
             frame, text="PDFに変換", command=self._start_conversion
@@ -137,6 +148,23 @@ class PptxToPdfApp:
         for path in self.selected_files:
             self.file_list.insert(tk.END, str(path))
 
+    def _remove_selected_files(self, _event: tk.Event | None = None) -> str:
+        if self.converting:
+            self._write_log("変換中は選択項目を削除できません。")
+            return "break"
+
+        selected_indices = list(self.file_list.curselection())
+        if not selected_indices:
+            self._write_log("削除するファイルを一覧から選択してください。")
+            return "break"
+
+        for index in reversed(selected_indices):
+            del self.selected_files[index]
+            self.file_list.delete(index)
+
+        self._write_log(f"選択リストから{len(selected_indices)}件を削除しました。")
+        return "break"
+
     def _select_files(self) -> None:
         names = filedialog.askopenfilenames(
             title="Officeファイルを選択",
@@ -185,6 +213,7 @@ class PptxToPdfApp:
 
         self.converting = True
         self.select_button.configure(state=tk.DISABLED)
+        self.remove_button.configure(state=tk.DISABLED)
         self.convert_button.configure(state=tk.DISABLED)
         self._write_log("変換を開始します。")
 
@@ -319,6 +348,7 @@ class PptxToPdfApp:
         try:
             # UpdateLinks=False, ReadOnly=True。元のブックは変更しない。
             workbook = excel.Workbooks.Open(str(source_path), MSO_FALSE, MSO_TRUE)
+            self._optimize_excel_print_settings(workbook)
             # ExcelはPowerPoint/Wordと引数の順序が異なり、形式が先になる。
             workbook.ExportAsFixedFormat(EXCEL_PDF_FORMAT, str(pdf_path))
             self.events.put(("log", f"成功: {source_path.name} → {pdf_path.name}"))
@@ -330,6 +360,42 @@ class PptxToPdfApp:
                     self.events.put(
                         ("log", f"警告: {source_path.name} を閉じられませんでした ({exc})")
                     )
+
+    def _optimize_excel_print_settings(self, workbook: object) -> None:
+        optimized_sheets = 0
+        for worksheet in workbook.Worksheets:
+            if worksheet.Visible != EXCEL_VISIBLE:
+                continue
+
+            used_range = worksheet.UsedRange
+            # 値がない完全な空シートはPDFの印刷対象に追加しない。
+            if used_range.Count == 1 and used_range.Value2 is None:
+                continue
+
+            try:
+                page_setup = worksheet.PageSetup
+                page_setup.PrintArea = used_range.Address
+                page_setup.PaperSize = EXCEL_A4
+                page_setup.Orientation = (
+                    EXCEL_LANDSCAPE
+                    if used_range.Columns.Count > LANDSCAPE_COLUMN_THRESHOLD
+                    else EXCEL_PORTRAIT
+                )
+                # 横方向は必ず1ページに収め、縦方向は内容量に応じて
+                # Excelに自動改ページさせる。
+                page_setup.Zoom = MSO_FALSE
+                page_setup.FitToPagesWide = 1
+                page_setup.FitToPagesTall = MSO_FALSE
+                page_setup.CenterHorizontally = MSO_TRUE
+                optimized_sheets += 1
+            except Exception as exc:
+                raise RuntimeError(
+                    f"シート「{worksheet.Name}」の印刷設定を最適化できませんでした: {exc}"
+                ) from exc
+
+        self.events.put(
+            ("log", f"Excelの印刷設定を最適化しました（{optimized_sheets}シート）。")
+        )
 
     def _log_export_retry(self, export_error: Exception) -> None:
         self.events.put(
@@ -357,6 +423,7 @@ class PptxToPdfApp:
                 if event == "done":
                     self.converting = False
                     self.select_button.configure(state=tk.NORMAL)
+                    self.remove_button.configure(state=tk.NORMAL)
                     self.convert_button.configure(state=tk.NORMAL)
         except queue.Empty:
             pass
