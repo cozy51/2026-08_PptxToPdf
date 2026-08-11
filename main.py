@@ -364,38 +364,74 @@ class PptxToPdfApp:
     def _optimize_excel_print_settings(self, workbook: object) -> None:
         optimized_sheets = 0
         for worksheet in workbook.Worksheets:
-            if worksheet.Visible != EXCEL_VISIBLE:
-                continue
-
-            used_range = worksheet.UsedRange
-            # 値がない完全な空シートはPDFの印刷対象に追加しない。
-            if used_range.Count == 1 and used_range.Value2 is None:
-                continue
-
             try:
+                if worksheet.Visible != EXCEL_VISIBLE:
+                    continue
+
+                used_range = worksheet.UsedRange
+                # 値がない完全な空シートはPDFの印刷対象に追加しない。
+                if used_range.Count == 1 and used_range.Value2 is None:
+                    continue
+
                 page_setup = worksheet.PageSetup
-                page_setup.PrintArea = used_range.Address
-                page_setup.PaperSize = EXCEL_A4
-                page_setup.Orientation = (
-                    EXCEL_LANDSCAPE
-                    if used_range.Columns.Count > LANDSCAPE_COLUMN_THRESHOLD
-                    else EXCEL_PORTRAIT
+                settings = (
+                    ("PrintArea", used_range.Address, "印刷範囲"),
+                    ("PaperSize", EXCEL_A4, "用紙サイズ(A4)"),
+                    (
+                        "Orientation",
+                        EXCEL_LANDSCAPE
+                        if used_range.Columns.Count > LANDSCAPE_COLUMN_THRESHOLD
+                        else EXCEL_PORTRAIT,
+                        "印刷方向",
+                    ),
+                    ("Zoom", MSO_FALSE, "拡大縮小率"),
+                    ("FitToPagesWide", 1, "横幅1ページ"),
+                    ("FitToPagesTall", MSO_FALSE, "縦方向自動改ページ"),
+                    ("CenterHorizontally", MSO_TRUE, "横中央配置"),
                 )
-                # 横方向は必ず1ページに収め、縦方向は内容量に応じて
-                # Excelに自動改ページさせる。
-                page_setup.Zoom = MSO_FALSE
-                page_setup.FitToPagesWide = 1
-                page_setup.FitToPagesTall = MSO_FALSE
-                page_setup.CenterHorizontally = MSO_TRUE
-                optimized_sheets += 1
+                applied_settings = sum(
+                    self._try_set_excel_page_property(
+                        page_setup, property_name, value, worksheet.Name, label
+                    )
+                    for property_name, value, label in settings
+                )
+                if applied_settings:
+                    optimized_sheets += 1
             except Exception as exc:
-                raise RuntimeError(
-                    f"シート「{worksheet.Name}」の印刷設定を最適化できませんでした: {exc}"
-                ) from exc
+                # PageSetupの一部はプリンタードライバーやExcelのバージョンに
+                # 依存する。最適化できなくてもPDF変換そのものは続行する。
+                self.events.put(
+                    (
+                        "log",
+                        f"警告: シート「{worksheet.Name}」の印刷設定を取得できないため、"
+                        f"設定可能な範囲で変換を続けます ({exc})",
+                    )
+                )
 
         self.events.put(
             ("log", f"Excelの印刷設定を最適化しました（{optimized_sheets}シート）。")
         )
+
+    def _try_set_excel_page_property(
+        self,
+        page_setup: object,
+        property_name: str,
+        value: object,
+        sheet_name: str,
+        label: str,
+    ) -> int:
+        try:
+            setattr(page_setup, property_name, value)
+            return 1
+        except Exception as exc:
+            self.events.put(
+                (
+                    "log",
+                    f"警告: シート「{sheet_name}」の{label}を設定できませんでした。"
+                    f"この設定を省略して変換を続けます ({exc})",
+                )
+            )
+            return 0
 
     def _log_export_retry(self, export_error: Exception) -> None:
         self.events.put(
