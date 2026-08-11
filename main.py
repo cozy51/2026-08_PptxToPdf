@@ -21,7 +21,16 @@ MSO_FALSE = 0
 PDF_FORMAT = 2  # PowerPoint: ppFixedFormatTypePDF
 SAVE_AS_PDF = 32  # PowerPoint: ppSaveAsPDF
 WORD_PDF_FORMAT = 17  # Word: wdExportFormatPDF / wdFormatPDF
-SUPPORTED_EXTENSIONS = {".pptx", ".doc", ".docx"}
+EXCEL_PDF_FORMAT = 0  # Excel: xlTypePDF
+SUPPORTED_EXTENSIONS = {
+    ".pptx",
+    ".doc",
+    ".docx",
+    ".xls",
+    ".xlsx",
+    ".xlsm",
+    ".xlsb",
+}
 
 
 class PptxToPdfApp:
@@ -53,7 +62,7 @@ class PptxToPdfApp:
         )
         self.select_button.pack(side=tk.LEFT)
         ttk.Label(
-            controls, text="  またはPPTX・Wordファイルを下の一覧へドラッグ＆ドロップ"
+            controls, text="  またはPowerPoint・Word・Excelファイルを一覧へドロップ"
         ).pack(side=tk.LEFT)
 
         files_frame = ttk.LabelFrame(frame, text="選択したファイル", padding=6)
@@ -132,9 +141,13 @@ class PptxToPdfApp:
         names = filedialog.askopenfilenames(
             title="Officeファイルを選択",
             filetypes=[
-                ("対応するOfficeファイル", "*.pptx *.doc *.docx"),
+                (
+                    "対応するOfficeファイル",
+                    "*.pptx *.doc *.docx *.xls *.xlsx *.xlsm *.xlsb",
+                ),
                 ("PowerPoint プレゼンテーション", "*.pptx"),
                 ("Word 文書", "*.doc *.docx"),
+                ("Excel ブック", "*.xls *.xlsx *.xlsm *.xlsb"),
             ],
         )
         if not names:
@@ -146,7 +159,7 @@ class PptxToPdfApp:
     def _start_conversion(self) -> None:
         if not self.selected_files:
             messagebox.showwarning(
-                "ファイル未選択", "PPTXまたはWordファイルを選択してください。"
+                "ファイル未選択", "PowerPoint・Word・Excelファイルを選択してください。"
             )
             return
 
@@ -184,6 +197,7 @@ class PptxToPdfApp:
     def _convert_files(self, paths: list[Path]) -> None:
         powerpoint = None
         word = None
+        excel = None
         pythoncom.CoInitialize()
         try:
             for source_path in paths:
@@ -206,6 +220,12 @@ class PptxToPdfApp:
                             word = win32com.client.DispatchEx("Word.Application")
                             word.DisplayAlerts = MSO_FALSE
                         self._convert_word_file(word, source_path)
+                    elif extension in {".xls", ".xlsx", ".xlsm", ".xlsb"}:
+                        current_step = "Excelを起動"
+                        if excel is None:
+                            excel = win32com.client.DispatchEx("Excel.Application")
+                            excel.DisplayAlerts = MSO_FALSE
+                        self._convert_excel_file(excel, source_path)
                     else:
                         raise ValueError("対応していない拡張子です")
                 except Exception as exc:
@@ -216,6 +236,13 @@ class PptxToPdfApp:
                         )
                     )
         finally:
+            if excel is not None:
+                try:
+                    excel.Quit()
+                except Exception as exc:
+                    self.events.put(("log", f"Excelの終了時にエラーが発生しました: {exc}"))
+                finally:
+                    excel = None
             if word is not None:
                 try:
                     word.Quit()
@@ -281,6 +308,24 @@ class PptxToPdfApp:
             if document is not None:
                 try:
                     document.Close(MSO_FALSE)
+                except Exception as exc:
+                    self.events.put(
+                        ("log", f"警告: {source_path.name} を閉じられませんでした ({exc})")
+                    )
+
+    def _convert_excel_file(self, excel: object, source_path: Path) -> None:
+        workbook = None
+        pdf_path = source_path.with_suffix(".pdf")
+        try:
+            # UpdateLinks=False, ReadOnly=True。元のブックは変更しない。
+            workbook = excel.Workbooks.Open(str(source_path), MSO_FALSE, MSO_TRUE)
+            # ExcelはPowerPoint/Wordと引数の順序が異なり、形式が先になる。
+            workbook.ExportAsFixedFormat(EXCEL_PDF_FORMAT, str(pdf_path))
+            self.events.put(("log", f"成功: {source_path.name} → {pdf_path.name}"))
+        finally:
+            if workbook is not None:
+                try:
+                    workbook.Close(MSO_FALSE)
                 except Exception as exc:
                     self.events.put(
                         ("log", f"警告: {source_path.name} を閉じられませんでした ({exc})")
