@@ -47,9 +47,9 @@ SUPPORTED_EXTENSIONS = {
 class PptxToPdfApp:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
-        self.root.title("Office to PDF")
-        self.root.geometry("760x680")
-        self.root.minsize(600, 560)
+        self.root.title("Office PDF コンバーター")
+        self.root.geometry("800x760")
+        self.root.minsize(640, 650)
 
         self.selected_files: list[Path] = []
         self.completed_files: list[Path] = []
@@ -57,34 +57,108 @@ class PptxToPdfApp:
         self.converting = False
         self.optimize_excel_var = tk.BooleanVar(value=False)
 
+        self._configure_styles()
         self._build_ui()
         self._configure_drag_and_drop()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
+    def _configure_styles(self) -> None:
+        style = ttk.Style(self.root)
+        style.theme_use("clam")
+        style.configure("App.TFrame", background="#f4f8ff")
+        style.configure(
+            "Title.TLabel",
+            background="#f4f8ff",
+            foreground="#274c77",
+            font=("Yu Gothic UI", 20, "bold"),
+        )
+        style.configure(
+            "Subtitle.TLabel",
+            background="#f4f8ff",
+            foreground="#55708f",
+            font=("Yu Gothic UI", 10),
+        )
+        style.configure(
+            "Accent.TButton",
+            background="#f05d4e",
+            foreground="white",
+            borderwidth=0,
+            padding=(24, 12),
+            font=("Yu Gothic UI", 13, "bold"),
+        )
+        style.map(
+            "Accent.TButton",
+            background=[("active", "#ff7869"), ("disabled", "#c7cbd1")],
+            foreground=[("disabled", "#f2f2f2")],
+        )
+        style.configure(
+            "Tool.TButton", padding=(10, 6), font=("Yu Gothic UI", 9)
+        )
+        style.configure(
+            "Section.TLabelframe",
+            background="#f4f8ff",
+            bordercolor="#b8c9dd",
+            relief=tk.SOLID,
+        )
+        style.configure(
+            "Section.TLabelframe.Label",
+            background="#f4f8ff",
+            foreground="#274c77",
+            font=("Yu Gothic UI", 10, "bold"),
+        )
+        style.configure("App.TCheckbutton", background="#f4f8ff")
+        self.root.configure(background="#f4f8ff")
+
     def _build_ui(self) -> None:
-        frame = ttk.Frame(self.root, padding=12)
+        frame = ttk.Frame(self.root, padding=16, style="App.TFrame")
         frame.pack(fill=tk.BOTH, expand=True)
         frame.columnconfigure(0, weight=1)
-        frame.rowconfigure(1, weight=1)
         frame.rowconfigure(2, weight=1)
-        frame.rowconfigure(6, weight=1)
+        frame.rowconfigure(3, weight=1)
+        frame.rowconfigure(7, weight=1)
 
-        controls = ttk.Frame(frame)
-        controls.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        header = ttk.Frame(frame, style="App.TFrame")
+        header.grid(row=0, column=0, sticky="ew", pady=(0, 14))
+        ttk.Label(header, text="Office PDF コンバーター", style="Title.TLabel").pack(
+            anchor=tk.W
+        )
+        ttk.Label(
+            header,
+            text="ドラッグ＆ドロップで、まとめてかんたんPDF変換 ✨",
+            style="Subtitle.TLabel",
+        ).pack(anchor=tk.W, pady=(2, 0))
+
+        controls = ttk.Frame(frame, style="App.TFrame")
+        controls.grid(row=1, column=0, sticky="ew", pady=(0, 8))
         self.select_button = ttk.Button(
-            controls, text="Officeファイルを選択", command=self._select_files
+            controls,
+            text="＋ Officeファイルを選択",
+            command=self._select_files,
+            style="Tool.TButton",
         )
         self.select_button.pack(side=tk.LEFT)
         ttk.Label(
             controls, text="  またはPowerPoint・Word・Excelファイルを一覧へドロップ"
         ).pack(side=tk.LEFT)
 
-        files_frame = ttk.LabelFrame(frame, text="選択したファイル", padding=6)
-        files_frame.grid(row=1, column=0, sticky="nsew")
+        files_frame = ttk.LabelFrame(
+            frame, text="① 変換するファイル", padding=8, style="Section.TLabelframe"
+        )
+        files_frame.grid(row=2, column=0, sticky="nsew")
         files_frame.columnconfigure(0, weight=1)
         files_frame.rowconfigure(0, weight=1)
 
-        self.file_list = tk.Listbox(files_frame, selectmode=tk.EXTENDED)
+        self.file_list = tk.Listbox(
+            files_frame,
+            selectmode=tk.EXTENDED,
+            background="#fff4b8",
+            foreground="#493d13",
+            selectbackground="#f4a261",
+            selectforeground="#1f2933",
+            relief=tk.FLAT,
+            borderwidth=0,
+            font=("Yu Gothic UI", 9),
+        )
         self.file_list.grid(row=0, column=0, sticky="nsew")
         files_scroll = ttk.Scrollbar(
             files_frame, orient=tk.VERTICAL, command=self.file_list.yview
@@ -94,16 +168,34 @@ class PptxToPdfApp:
         self.file_list.bind("<Delete>", self._remove_selected_files)
 
         self.remove_button = ttk.Button(
-            files_frame, text="選択項目を削除", command=self._remove_selected_files
+            files_frame,
+            text="選択項目を削除",
+            command=self._remove_selected_files,
+            style="Tool.TButton",
         )
         self.remove_button.grid(row=1, column=0, sticky=tk.W, pady=(6, 0))
 
-        completed_frame = ttk.LabelFrame(frame, text="処理が完了したファイル", padding=6)
-        completed_frame.grid(row=2, column=0, sticky="nsew", pady=(8, 0))
+        completed_frame = ttk.LabelFrame(
+            frame,
+            text="② PDF変換が完了したファイル",
+            padding=8,
+            style="Section.TLabelframe",
+        )
+        completed_frame.grid(row=3, column=0, sticky="nsew", pady=(10, 0))
         completed_frame.columnconfigure(0, weight=1)
         completed_frame.rowconfigure(0, weight=1)
 
-        self.completed_list = tk.Listbox(completed_frame, selectmode=tk.EXTENDED)
+        self.completed_list = tk.Listbox(
+            completed_frame,
+            selectmode=tk.EXTENDED,
+            background="#e4f6df",
+            foreground="#23451f",
+            selectbackground="#7bc47f",
+            selectforeground="#102a13",
+            relief=tk.FLAT,
+            borderwidth=0,
+            font=("Yu Gothic UI", 9),
+        )
         self.completed_list.grid(row=0, column=0, sticky="nsew")
         completed_scroll = ttk.Scrollbar(
             completed_frame, orient=tk.VERTICAL, command=self.completed_list.yview
@@ -116,28 +208,47 @@ class PptxToPdfApp:
             completed_frame,
             text="選択項目を未処理リストへ戻す",
             command=self._restore_completed_files,
+            style="Tool.TButton",
         )
         self.restore_button.grid(row=1, column=0, sticky=tk.W, pady=(6, 0))
 
         self.convert_button = ttk.Button(
-            frame, text="PDFに変換", command=self._start_conversion
+            frame,
+            text="PDFに変換する ▶",
+            command=self._start_conversion,
+            style="Accent.TButton",
         )
-        self.convert_button.grid(row=3, column=0, sticky=tk.W, pady=(10, 4))
+        self.convert_button.grid(row=4, column=0, sticky="ew", pady=(14, 8))
 
         self.optimize_excel_check = ttk.Checkbutton(
             frame,
             text="Excelの印刷範囲・用紙方向・倍率をPDF化前に最適化する",
             variable=self.optimize_excel_var,
+            style="App.TCheckbutton",
         )
-        self.optimize_excel_check.grid(row=4, column=0, sticky=tk.W, pady=(0, 10))
+        self.optimize_excel_check.grid(row=5, column=0, sticky=tk.W, pady=(0, 12))
 
-        ttk.Label(frame, text="処理結果ログ").grid(row=5, column=0, sticky=tk.W)
-        log_frame = ttk.Frame(frame)
-        log_frame.grid(row=6, column=0, sticky="nsew", pady=(4, 0))
+        ttk.Label(
+            frame, text="処理結果ログ", style="Subtitle.TLabel"
+        ).grid(row=6, column=0, sticky=tk.W)
+        log_frame = ttk.Frame(frame, style="App.TFrame")
+        log_frame.grid(row=7, column=0, sticky="nsew", pady=(4, 0))
         log_frame.columnconfigure(0, weight=1)
         log_frame.rowconfigure(0, weight=1)
 
-        self.log = tk.Text(log_frame, height=10, state=tk.DISABLED, wrap=tk.WORD)
+        self.log = tk.Text(
+            log_frame,
+            height=10,
+            state=tk.DISABLED,
+            wrap=tk.WORD,
+            background="#ffffff",
+            foreground="#334e68",
+            relief=tk.FLAT,
+            borderwidth=0,
+            padx=8,
+            pady=8,
+            font=("Yu Gothic UI", 9),
+        )
         self.log.grid(row=0, column=0, sticky="nsew")
         log_scroll = ttk.Scrollbar(log_frame, orient=tk.VERTICAL, command=self.log.yview)
         log_scroll.grid(row=0, column=1, sticky="ns")
