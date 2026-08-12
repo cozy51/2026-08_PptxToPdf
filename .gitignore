@@ -1,0 +1,6 @@
+__pycache__/
+*.py[cod]
+.venv/
+
+# 利用者が差し替えたアイコン（同梱のBase64版が既定として使われる）
+/assets/app_icon.png

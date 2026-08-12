@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import gc
 import queue
 import threading
@@ -42,6 +43,30 @@ SUPPORTED_EXTENSIONS = {
     ".xlsm",
     ".xlsb",
 }
+ICON_DIRECTORY_NAME = "assets"
+# 同梱アイコンのサイズ。tkはこの中から用途に合うものを選ぶ。
+ICON_SIZES = (16, 32, 48, 256)
+# 利用者が差し替える場合に読み込むファイル名。
+ICON_OVERRIDE_NAME = "app_icon.png"
+
+
+def _read_icon_bytes(path: Path) -> bytes | None:
+    """アイコンを読み込む。
+
+    差し替え用のバイナリ（例: assets/app_icon.png）があればそれを優先し、
+    無ければ同名のBase64テキスト（例: assets/app_icon.png.b64）を復号する。
+    読み込めない場合はNoneを返し、呼び出し側でアイコン設定を諦める。
+    """
+
+    try:
+        if path.is_file():
+            return path.read_bytes()
+        encoded_path = path.with_suffix(path.suffix + ".b64")
+        if encoded_path.is_file():
+            return base64.b64decode(encoded_path.read_text(encoding="ascii"))
+    except (OSError, ValueError):
+        return None
+    return None
 
 
 class PptxToPdfApp:
@@ -56,11 +81,50 @@ class PptxToPdfApp:
         self.events: queue.Queue[tuple[str, str]] = queue.Queue()
         self.converting = False
         self.optimize_excel_var = tk.BooleanVar(value=False)
+        self.icon_images: list[tk.PhotoImage] = []
 
+        self._configure_window_icon()
         self._configure_styles()
         self._build_ui()
         self._configure_drag_and_drop()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    def _configure_window_icon(self) -> None:
+        """ウィンドウとタスクバーのアイコンを設定する。
+
+        アイコンが読み込めなくてもアプリは通常どおり起動させたいので、
+        失敗しても例外は送出せず既定のアイコンのままにする。
+        """
+
+        icon_dir = Path(__file__).resolve().parent / ICON_DIRECTORY_NAME
+
+        override = _read_icon_bytes(icon_dir / ICON_OVERRIDE_NAME)
+        if override is not None:
+            sources = [override]
+        else:
+            sources = [
+                data
+                for data in (
+                    _read_icon_bytes(icon_dir / f"app_icon_{size}.png")
+                    for size in ICON_SIZES
+                )
+                if data is not None
+            ]
+        if not sources:
+            return
+
+        try:
+            # PhotoImageは参照が無くなると破棄されるため属性として保持する。
+            self.icon_images = [
+                tk.PhotoImage(master=self.root, data=base64.b64encode(data))
+                for data in sources
+            ]
+            # 複数サイズを渡すと、タイトルバーとタスクバーそれぞれに適した
+            # 大きさが選ばれる。Trueを指定すると、メッセージダイアログなど
+            # 後から作るウィンドウにも同じアイコンが適用される。
+            self.root.iconphoto(True, *self.icon_images)
+        except tk.TclError:
+            self.icon_images = []
 
     def _configure_styles(self) -> None:
         style = ttk.Style(self.root)
