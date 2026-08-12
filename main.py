@@ -3,9 +3,12 @@ from __future__ import annotations
 import base64
 import gc
 import queue
+import sys
 import threading
 import tkinter as tk
 import unicodedata
+import winreg
+from collections.abc import Iterable, Sequence
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
@@ -34,20 +37,127 @@ EXCEL_DEFAULT_MARGIN_POINTS = 36.0
 EXCEL_MIN_ZOOM = 10
 EXCEL_MAX_OVERFLOW_COLUMNS = 50
 EXCEL_MAX_OVERFLOW_ROWS = 10000
-SUPPORTED_EXTENSIONS = {
-    ".pptx",
-    ".doc",
-    ".docx",
-    ".xls",
-    ".xlsx",
-    ".xlsm",
-    ".xlsb",
+# 拡張子ごとに必要なOfficeアプリケーション。ProgIDはCOMでの起動に、
+# 表示名はログとエラーメッセージに使う。Office本体はアプリへ同梱しないため、
+# 変換は配布先PCにインストールされたOfficeへ委ねる。
+OFFICE_APPLICATIONS: dict[str, tuple[str, str]] = {
+    ".pptx": ("PowerPoint.Application", "PowerPoint"),
+    ".doc": ("Word.Application", "Word"),
+    ".docx": ("Word.Application", "Word"),
+    ".xls": ("Excel.Application", "Excel"),
+    ".xlsx": ("Excel.Application", "Excel"),
+    ".xlsm": ("Excel.Application", "Excel"),
+    ".xlsb": ("Excel.Application", "Excel"),
 }
+SUPPORTED_EXTENSIONS = frozenset(OFFICE_APPLICATIONS)
+# ProgIDやCLSIDを解決できないときにCOMが返すHRESULT。Officeが未インストール、
+# または登録情報が壊れている場合に発生する。
+COM_CLASS_UNAVAILABLE_HRESULTS = frozenset(
+    {
+        -2147221005,  # CO_E_CLASSSTRING: 無効なクラス文字列
+        -2147221164,  # REGDB_E_CLASSNOTREG: クラスが登録されていない
+        -2147221021,  # MK_E_UNAVAILABLE: オブジェクトを取得できない
+    }
+)
+NO_OFFICE_MESSAGE = (
+    "Microsoft PowerPoint・Word・Excelのいずれもこのパソコンで見つかりません。\n\n"
+    "本アプリは、パソコンにインストールされたOfficeを操作してPDFを作成します。"
+    "Office本体はアプリに含まれていないため、このままではPDFへ変換できません。\n\n"
+    "デスクトップ版のMicrosoft Officeをインストールし、一度Officeを起動して"
+    "ライセンス認証を済ませてから、本アプリをもう一度起動してください。"
+)
 ICON_DIRECTORY_NAME = "assets"
 # 同梱アイコンのサイズ。tkはこの中から用途に合うものを選ぶ。
 ICON_SIZES = (16, 32, 48, 256)
 # 利用者が差し替える場合に読み込むファイル名。
 ICON_OVERRIDE_NAME = "app_icon.png"
+
+
+class OfficeNotInstalledError(RuntimeError):
+    """必要なOfficeアプリケーションを起動できないときに送出する。"""
+
+    def __init__(self, display_name: str) -> None:
+        self.display_name = display_name
+        super().__init__(f"Microsoft {display_name} を起動できません")
+
+
+def _office_missing_message(display_names: Sequence[str]) -> str:
+    """未インストールのOfficeについて、利用者向けの案内文を作る。"""
+
+    joined = "、".join(f"Microsoft {name}" for name in display_names)
+    return (
+        f"{joined} がこのパソコンで見つかりません。\n\n"
+        "本アプリは、パソコンにインストールされたOfficeを操作してPDFを作成します。"
+        "Office本体はアプリに含まれていないため、対象の形式は変換できません。\n\n"
+        "次の点を確認してください。\n"
+        f"・スタートメニューから{joined}を起動できるか\n"
+        "・Web版やモバイル版ではなく、デスクトップ版のOfficeか\n"
+        "・インストール直後の場合、一度Officeを起動してライセンス認証を終えたか\n\n"
+        "変換できないファイルを一覧から削除すると、残りのファイルは変換できます。"
+    )
+
+
+def _is_office_application_installed(prog_id: str) -> bool:
+    """ProgIDがレジストリに登録されているかを調べる。
+
+    Officeを起動せずに確認できるため、変換を始める前の事前チェックに使う。
+    登録があっても実際の起動に失敗することはあるので、起動時の例外処理と
+    組み合わせて使用する。
+    """
+
+    try:
+        with winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, f"{prog_id}\\CLSID"):
+            return True
+    except OSError:
+        return False
+
+
+def _missing_office_applications(paths: Iterable[Path]) -> list[str]:
+    """変換に必要なOfficeのうち、インストールされていないものを返す。"""
+
+    required: dict[str, str] = {}
+    for path in paths:
+        application = OFFICE_APPLICATIONS.get(path.suffix.lower())
+        if application is not None:
+            prog_id, display_name = application
+            required[prog_id] = display_name
+
+    return [
+        display_name
+        for prog_id, display_name in sorted(required.items())
+        if not _is_office_application_installed(prog_id)
+    ]
+
+
+def _is_com_class_unavailable(error: Exception) -> bool:
+    """COMのクラスを解決できなかったことを示す例外かどうかを判定する。"""
+
+    hresult = getattr(error, "hresult", None)
+    if hresult is None:
+        arguments = getattr(error, "args", ())
+        hresult = arguments[0] if arguments and isinstance(arguments[0], int) else None
+    return hresult in COM_CLASS_UNAVAILABLE_HRESULTS
+
+
+def _application_directory() -> Path:
+    """exe（またはmain.py）が置かれているフォルダーを返す。"""
+
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
+def _bundled_resource_directory() -> Path:
+    """同梱リソースの場所を返す。
+
+    one-file形式のexeでは、実行時に展開される一時フォルダー（sys._MEIPASS）に
+    リソースが置かれる。ソースから起動した場合はmain.pyと同じフォルダー。
+    """
+
+    bundle_directory = getattr(sys, "_MEIPASS", None)
+    if bundle_directory is not None:
+        return Path(bundle_directory)
+    return Path(__file__).resolve().parent
 
 
 def _read_icon_bytes(path: Path) -> bytes | None:
@@ -88,6 +198,30 @@ class PptxToPdfApp:
         self._build_ui()
         self._configure_drag_and_drop()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        # ウィンドウを表示してから確認結果を出したいので、描画後に実行する。
+        self.root.after(0, self._report_office_availability)
+
+    def _report_office_availability(self) -> None:
+        """起動時に、使用できるOfficeアプリケーションをログへ表示する。"""
+
+        installed: list[str] = []
+        missing: list[str] = []
+        for prog_id, display_name in sorted(set(OFFICE_APPLICATIONS.values())):
+            if _is_office_application_installed(prog_id):
+                installed.append(display_name)
+            else:
+                missing.append(display_name)
+
+        if installed:
+            self._write_log("使用できるOffice: " + "、".join(installed))
+        if missing:
+            self._write_log(
+                "見つからないOffice: "
+                + "、".join(missing)
+                + "（対応する形式のファイルはPDFへ変換できません）"
+            )
+        if not installed:
+            messagebox.showerror("Microsoft Officeが見つかりません", NO_OFFICE_MESSAGE)
 
     def _configure_window_icon(self) -> None:
         """ウィンドウとタスクバーのアイコンを設定する。
@@ -96,16 +230,18 @@ class PptxToPdfApp:
         失敗しても例外は送出せず既定のアイコンのままにする。
         """
 
-        icon_dir = Path(__file__).resolve().parent / ICON_DIRECTORY_NAME
+        # 差し替え用アイコンはexeの隣、同梱アイコンはexeへ格納された側から読む。
+        override_directory = _application_directory() / ICON_DIRECTORY_NAME
+        bundled_directory = _bundled_resource_directory() / ICON_DIRECTORY_NAME
 
-        override = _read_icon_bytes(icon_dir / ICON_OVERRIDE_NAME)
+        override = _read_icon_bytes(override_directory / ICON_OVERRIDE_NAME)
         if override is not None:
             sources = [override]
         else:
             sources = [
                 data
                 for data in (
-                    _read_icon_bytes(icon_dir / f"app_icon_{size}.png")
+                    _read_icon_bytes(bundled_directory / f"app_icon_{size}.png")
                     for size in ICON_SIZES
                 )
                 if data is not None
@@ -441,6 +577,20 @@ class PptxToPdfApp:
             )
             return
 
+        # 上書き確認を始める前に、必要なOfficeが揃っているかを確かめる。
+        missing_applications = _missing_office_applications(self.selected_files)
+        if missing_applications:
+            self._write_log(
+                "変換を中止しました: "
+                + "、".join(f"Microsoft {name}" for name in missing_applications)
+                + " が見つかりません。"
+            )
+            messagebox.showerror(
+                "Microsoft Officeが見つかりません",
+                _office_missing_message(missing_applications),
+            )
+            return
+
         files_to_convert: list[Path] = []
         for pptx_path in self.selected_files:
             pdf_path = pptx_path.with_suffix(".pdf")
@@ -477,10 +627,29 @@ class PptxToPdfApp:
         worker.start()
         self.root.after(100, self._process_events)
 
+    @staticmethod
+    def _start_office_application(extension: str) -> object:
+        """変換に必要なOfficeアプリケーションをバックグラウンドで起動する。
+
+        Officeが未インストールの場合、COMは「無効なクラス文字列」などの
+        分かりにくいエラーを返す。ここでOfficeNotInstalledErrorへ置き換え、
+        利用者向けの案内を表示できるようにする。
+        """
+
+        prog_id, display_name = OFFICE_APPLICATIONS[extension]
+        try:
+            return win32com.client.DispatchEx(prog_id)
+        except Exception as exc:
+            if _is_com_class_unavailable(exc):
+                raise OfficeNotInstalledError(display_name) from exc
+            raise
+
     def _convert_files(self, paths: list[Path], optimize_excel: bool) -> None:
         powerpoint = None
         word = None
         excel = None
+        # 同じOfficeについて案内ダイアログを何度も出さないよう記録する。
+        reported_missing: set[str] = set()
         pythoncom.CoInitialize()
         try:
             for source_path in paths:
@@ -493,24 +662,33 @@ class PptxToPdfApp:
                     if extension == ".pptx":
                         current_step = "PowerPointを起動"
                         if powerpoint is None:
-                            powerpoint = win32com.client.DispatchEx(
-                                "PowerPoint.Application"
-                            )
+                            powerpoint = self._start_office_application(extension)
                         self._convert_powerpoint_file(powerpoint, source_path)
                     elif extension in {".doc", ".docx"}:
                         current_step = "Wordを起動"
                         if word is None:
-                            word = win32com.client.DispatchEx("Word.Application")
+                            word = self._start_office_application(extension)
                             word.DisplayAlerts = MSO_FALSE
                         self._convert_word_file(word, source_path)
                     elif extension in {".xls", ".xlsx", ".xlsm", ".xlsb"}:
                         current_step = "Excelを起動"
                         if excel is None:
-                            excel = win32com.client.DispatchEx("Excel.Application")
+                            excel = self._start_office_application(extension)
                             excel.DisplayAlerts = MSO_FALSE
                         self._convert_excel_file(excel, source_path, optimize_excel)
                     else:
                         raise ValueError("対応していない拡張子です")
+                except OfficeNotInstalledError as exc:
+                    self.events.put(
+                        (
+                            "log",
+                            f"失敗 [{current_step}]: {source_path.name}"
+                            f"（Microsoft {exc.display_name}が見つかりません）",
+                        )
+                    )
+                    if exc.display_name not in reported_missing:
+                        reported_missing.add(exc.display_name)
+                        self.events.put(("office_missing", exc.display_name))
                 except Exception as exc:
                     self.events.put(
                         (
@@ -877,6 +1055,11 @@ class PptxToPdfApp:
                     self._write_log(
                         f"成功: {source_path.name} → {source_path.with_suffix('.pdf').name}"
                     )
+                elif event == "office_missing":
+                    messagebox.showerror(
+                        "Microsoft Officeが見つかりません",
+                        _office_missing_message([message]),
+                    )
                 else:
                     self._write_log(message)
                 if event == "done":
@@ -906,9 +1089,19 @@ class PptxToPdfApp:
 
 
 def main() -> None:
-    root = TkinterDnD.Tk()
-    PptxToPdfApp(root)
-    root.mainloop()
+    # exeはコンソールを表示しないため、起動に失敗した理由が画面に残らない。
+    # 最後の受け皿としてダイアログへ出してから終了する。
+    try:
+        root = TkinterDnD.Tk()
+        PptxToPdfApp(root)
+        root.mainloop()
+    except Exception as exc:
+        messagebox.showerror(
+            "起動エラー",
+            "アプリの起動中に問題が発生しました。\n\n"
+            f"{type(exc).__name__}: {exc}",
+        )
+        raise
 
 
 if __name__ == "__main__":
