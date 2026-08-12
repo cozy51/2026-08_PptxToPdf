@@ -9,5 +9,9 @@ __pycache__/
 /build/
 /dist/
 
+# tools/make_manual.py が生成するマニュアルのPDF。
+# 本文は docs/install_manual.md にテキストで管理する。
+/docs/*.pdf
+
 # 利用者が差し替えたアイコン（同梱のBase64版が既定として使われる）
 /assets/app_icon.png

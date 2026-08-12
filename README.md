@@ -12,12 +12,20 @@ Microsoft PowerPoint・Word・Excelを自動操作し、複数のOfficeファイ
 
 ## Windows用exeをビルドする
 
-ビルドは**Windows 10/11上**で行ってください。リポジトリ直下の `build.bat` をダブルクリックすると、ビルド専用の仮想環境 `.venv-build` を作成し、PyInstallerと必要ライブラリをインストールしてからexeを生成します。古い `dist` と `build` はビルド時に削除されます。
-
-ビルドPCに必要なものは次のとおりです。
+ビルドは**Windows 10/11上**で行ってください。ビルドPCに必要なものは次のとおりです。
 
 - Python 3.10以降（python.org版を推奨）
 - 依存ライブラリを取得するためのインターネット接続
+
+コマンドプロンプトまたはPowerShellでリポジトリ直下へ移動し、ビルド専用の仮想環境を作ってPyInstallerを実行します。
+
+```powershell
+python -m venv .venv-build
+.venv-build\Scripts\activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+pyinstaller --noconfirm --clean OfficePdfConverter.spec
+```
 
 成功すると、配布用ファイルが次の場所に生成されます。
 
@@ -25,15 +33,11 @@ Microsoft PowerPoint・Word・Excelを自動操作し、複数のOfficeファイ
 dist\OfficePdfConverter.exe
 ```
 
+`--clean` は前回のビルドキャッシュを破棄します。作り直す場合は `dist` と `build` を削除してから実行してください。手順の詳細は [インストールマニュアル](docs/install_manual.md) にも記載しています。
+
 `OfficePdfConverter.spec` は1ファイル形式（one-file）、ウィンドウ形式（コンソール非表示）でビルドします。`pywin32`、`tkinterdnd2`、tkdndのDLL/Tclデータ、アプリアイコンなど、実行に必要なPython側のライブラリとリソースはexeへ格納されます。
 
 ビルドで生成される `.venv-build`、`build`、`dist` の3フォルダーは `.gitignore` で除外済みです。これらにはexeやicoといったバイナリが含まれ、バイナリファイルを扱えない環境では差分表示がエラーになるため、リポジトリへコミットしないでください。
-
-コマンドプロンプトから実行する場合も、リポジトリ直下で次のコマンドを実行できます。
-
-```bat
-build.bat
-```
 
 ### 配布方法
 
@@ -42,6 +46,17 @@ build.bat
 Microsoft Office本体はexeへ同梱されません。変換に使用する形式に応じて、配布先PCにデスクトップ版のMicrosoft PowerPoint、Word、Excelがインストールされ、起動・ライセンス認証済みである必要があります。本アプリは配布先PCにあるOfficeをCOM APIで自動操作します。
 
 配布前には、OfficeがインストールされたWindows 10/11 PCでexeを起動し、各対象形式を実際にPDF変換できることを確認してください。組織外へ配布する場合は、必要に応じてexeへコード署名を行うと、Windowsの発行元確認を受けやすくなります。
+
+### インストールマニュアル（PDF）
+
+導入手順をまとめたマニュアルを同梱しています。本文は [`docs/install_manual.md`](docs/install_manual.md) にテキストで管理し、配布用のPDFは次のコマンドで生成します。
+
+```powershell
+python -m pip install reportlab
+python tools\make_manual.py
+```
+
+`docs\インストールマニュアル.pdf` が作られます。PDFはバイナリのためリポジトリには含めていません。マニュアルは「exeを使う人向けの導入手順」と「exeをビルドする人向けの環境構築手順」の2部構成で、SmartScreenの警告への対処やよくあるトラブルも記載しています。
 
 ## インストール方法
 
@@ -90,13 +105,24 @@ Excelの印刷設定には、PCの既定プリンターやプリンタードラ�
 
 アイコンは `assets` フォルダーにBase64テキスト（`app_icon_16.png.b64` など4サイズ）として同梱しています。バイナリファイルを扱えない環境でもリポジトリをそのまま利用できるようにするためで、起動時に復号して読み込みます。読み込みに失敗した場合はアイコン設定だけを省略し、アプリは通常どおり起動します。
 
-好みのアイコンへ差し替える場合は、PNG画像を `assets\app_icon.png` という名前で置いてください。このファイルがあるときは同梱アイコンより優先されます。
+好みのアイコンへ差し替える場合は、PNG画像を `assets\app_icon.png` という名前で置いてください。このファイルがあるときは同梱アイコンより優先されます。exeで実行している場合は、exeと同じフォルダーに `assets` フォルダーを作ってその中へ置きます。
 
 同梱アイコンの絵柄そのものを描き変える場合は、`tools/make_icon.py` の図形定義を編集して次を実行します。標準ライブラリだけで動作します。
 
 ```powershell
 python tools\make_icon.py
 ```
+
+## Officeがインストールされていない場合
+
+本アプリはOffice本体を同梱せず、PCにインストール済みのPowerPoint・Word・ExcelをCOM APIで操作してPDFを作成します。そのため、必要なOfficeが無い場合は次のように案内します。
+
+- 起動直後に、使用できるOfficeと見つからないOfficeをログへ表示します。
+- どのOfficeも見つからない場合は、起動時に案内ダイアログを表示します。
+- 「PDFに変換」を押したとき、選択中のファイルに必要なOfficeが無ければ、変換を始める前に対象のOffice名と確認事項をダイアログで表示して中止します。
+- Officeの登録は残っているのに起動できない場合は、COMの「無効なクラス文字列」といったメッセージではなく、どのOfficeが使えないのかをログとダイアログで表示します。
+
+インストール済みかどうかは、レジストリのProgID（`PowerPoint.Application` など）の登録有無で判定します。Officeを起動せずに確認できるため、変換前のチェックが速く終わります。
 
 ## エラーが発生した場合
 
