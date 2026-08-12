@@ -8,7 +8,38 @@ Microsoft PowerPoint・Word・Excelを自動操作し、複数のOfficeファイ
 - PPTXにはMicrosoft **PowerPoint**、DOC・DOCXにはMicrosoft **Word**、XLS・XLSX・XLSM・XLSBにはMicrosoft **Excel**がインストール済みである必要があります。
 - PowerPoint、WordおよびExcelのCOM APIを使用します。
 - **LibreOfficeは不要**です（使用しません）。
-- Python 3.10以降を推奨します。
+- ソースから起動・ビルドするPCではPython 3.10以降を推奨します。配布先PCにPythonは不要です。
+
+## Windows用exeをビルドする
+
+ビルドは**Windows 10/11上**で行ってください。リポジトリ直下の `build.bat` をダブルクリックすると、ビルド専用の仮想環境 `.venv-build` を作成し、PyInstallerと必要ライブラリをインストールしてからexeを生成します。古い `dist` と `build` はビルド時に削除されます。
+
+ビルドPCに必要なものは次のとおりです。
+
+- Python 3.10以降（python.org版を推奨）
+- 依存ライブラリを取得するためのインターネット接続
+
+成功すると、配布用ファイルが次の場所に生成されます。
+
+```text
+dist\OfficePdfConverter.exe
+```
+
+`OfficePdfConverter.spec` は1ファイル形式（one-file）、ウィンドウ形式（コンソール非表示）でビルドします。`pywin32`、`tkinterdnd2`、tkdndのDLL/Tclデータ、アプリアイコンなど、実行に必要なPython側のライブラリとリソースはexeへ格納されます。
+
+コマンドプロンプトから実行する場合も、リポジトリ直下で次のコマンドを実行できます。
+
+```bat
+build.bat
+```
+
+### 配布方法
+
+`dist\OfficePdfConverter.exe` **1ファイルだけ**を配布先のWindows 10/11 PCへコピーしてください。インストーラーやPython環境は不要で、exeをダブルクリックするとコンソール画面を出さずにアプリのGUIだけが起動します。初回起動時は、ウイルス対策ソフトによる確認のため少し時間がかかる場合があります。
+
+Microsoft Office本体はexeへ同梱されません。変換に使用する形式に応じて、配布先PCにデスクトップ版のMicrosoft PowerPoint、Word、Excelがインストールされ、起動・ライセンス認証済みである必要があります。本アプリは配布先PCにあるOfficeをCOM APIで自動操作します。
+
+配布前には、OfficeがインストールされたWindows 10/11 PCでexeを起動し、各対象形式を実際にPDF変換できることを確認してください。組織外へ配布する場合は、必要に応じてexeへコード署名を行うと、Windowsの発行元確認を受けやすくなります。
 
 ## インストール方法
 
