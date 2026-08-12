@@ -27,6 +27,8 @@ dist\OfficePdfConverter.exe
 
 `OfficePdfConverter.spec` は1ファイル形式（one-file）、ウィンドウ形式（コンソール非表示）でビルドします。`pywin32`、`tkinterdnd2`、tkdndのDLL/Tclデータ、アプリアイコンなど、実行に必要なPython側のライブラリとリソースはexeへ格納されます。
 
+ビルドで生成される `.venv-build`、`build`、`dist` の3フォルダーは `.gitignore` で除外済みです。これらにはexeやicoといったバイナリが含まれ、バイナリファイルを扱えない環境では差分表示がエラーになるため、リポジトリへコミットしないでください。
+
 コマンドプロンプトから実行する場合も、リポジトリ直下で次のコマンドを実行できます。
 
 ```bat
