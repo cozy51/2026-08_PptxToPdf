@@ -1,0 +1,74 @@
+# 配布用のWindows exeをGitHubのWindowsランナーでビルドする。
+# 手元にWindows PCが無くてもexeを入手できるようにするためのワークフロー。
+name: Build Windows exe
+
+on:
+  # GitHubの Actions タブから手動で実行する。
+  workflow_dispatch:
+  # v1.0 のようなタグを付けたときは、リリースへexeを添付する。
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    # PyInstallerはクロスコンパイルできないため、必ずWindows上でビルドする。
+    runs-on: windows-latest
+
+    steps:
+      - name: ソースコードを取得
+        uses: actions/checkout@v4
+
+      - name: Pythonを準備
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: 依存ライブラリをインストール
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: exeをビルド
+        run: pyinstaller --noconfirm --clean OfficePdfConverter.spec
+
+      - name: 生成物を確認
+        run: |
+          $exe = "dist/OfficePdfConverter.exe"
+          if (-not (Test-Path $exe)) {
+              throw "exeが生成されていません: $exe"
+          }
+          "{0} ({1:N1} MB)" -f $exe, ((Get-Item $exe).Length / 1MB)
+
+      - name: インストールマニュアルのPDFを生成
+        run: |
+          python -m pip install reportlab
+          python tools/make_manual.py
+
+      - name: 成果物をアップロード
+        uses: actions/upload-artifact@v4
+        with:
+          name: OfficePdfConverter
+          path: |
+            dist/OfficePdfConverter.exe
+            docs/*.pdf
+          if-no-files-found: error
+
+      - name: リリースへ添付
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -ne 0) {
+              gh release create $tag --title $tag --generate-notes
+          }
+          $assets = @("dist/OfficePdfConverter.exe")
+          $assets += (Get-ChildItem docs/*.pdf | ForEach-Object { $_.FullName })
+          gh release upload $tag @assets --clobber

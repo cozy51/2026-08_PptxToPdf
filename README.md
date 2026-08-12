@@ -35,6 +35,21 @@ dist\OfficePdfConverter.exe
 
 `--clean` は前回のビルドキャッシュを破棄します。作り直す場合は `dist` と `build` を削除してから実行してください。手順の詳細は [インストールマニュアル](docs/install_manual.md) にも記載しています。
 
+### GitHub Actionsでビルドする（Windows PCが無い場合）
+
+手元にWindows環境が無くてもexeを入手できるよう、GitHubのWindowsランナーでビルドするワークフロー [`.github/workflows/build-exe.yml`](.github/workflows/build-exe.yml) を用意しています。
+
+1. GitHubのリポジトリで「Actions」タブを開きます。
+2. 左側の一覧から「Build Windows exe」を選びます。
+3. 「Run workflow」をクリックし、ビルドしたいブランチを選んで実行します。
+4. 数分で完了します。実行結果のページ下部「Artifacts」から `OfficePdfConverter` をダウンロードすると、ZIPの中にexeとインストールマニュアルのPDFが入っています。
+
+`v1.0` のような `v` で始まるタグをプッシュした場合は、同じ成果物がGitHubのリリースへ自動で添付されます。
+
+PyInstallerはクロスコンパイルに対応していないため、Windows用exeはWindows上でしかビルドできません。このワークフローも `windows-latest` のランナーで実行しています。
+
+### spec ファイルについて
+
 `OfficePdfConverter.spec` は1ファイル形式（one-file）、ウィンドウ形式（コンソール非表示）でビルドします。`pywin32`、`tkinterdnd2`、tkdndのDLL/Tclデータ、アプリアイコンなど、実行に必要なPython側のライブラリとリソースはexeへ格納されます。
 
 ビルドで生成される `.venv-build`、`build`、`dist` の3フォルダーは `.gitignore` で除外済みです。これらにはexeやicoといったバイナリが含まれ、バイナリファイルを扱えない環境では差分表示がエラーになるため、リポジトリへコミットしないでください。
