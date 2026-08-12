@@ -4,6 +4,7 @@ import gc
 import queue
 import threading
 import tkinter as tk
+import unicodedata
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
@@ -31,6 +32,8 @@ EXCEL_A4_PORTRAIT_WIDTH_POINTS = 595.28
 EXCEL_A4_LANDSCAPE_WIDTH_POINTS = 841.89
 EXCEL_DEFAULT_MARGIN_POINTS = 36.0
 EXCEL_MIN_ZOOM = 10
+EXCEL_MAX_OVERFLOW_COLUMNS = 50
+EXCEL_MAX_OVERFLOW_ROWS = 10000
 SUPPORTED_EXTENSIONS = {
     ".pptx",
     ".doc",
@@ -473,11 +476,14 @@ class PptxToPdfApp:
                     if used_range.Columns.Count > LANDSCAPE_COLUMN_THRESHOLD
                     else EXCEL_PORTRAIT
                 )
+                print_area, print_width = self._calculate_excel_print_area(
+                    worksheet, used_range
+                )
                 zoom = self._calculate_excel_zoom(
-                    used_range.Width, page_setup, orientation, worksheet.Name
+                    print_width, page_setup, orientation, worksheet.Name
                 )
                 settings = (
-                    ("PrintArea", used_range.Address, "印刷範囲"),
+                    ("PrintArea", print_area, "印刷範囲"),
                     ("PaperSize", EXCEL_A4, "用紙サイズ(A4)"),
                     ("Orientation", orientation, "印刷方向"),
                     # Excel環境によってZoom=FalseとFitToPages*が1004エラーに
@@ -560,6 +566,84 @@ class PptxToPdfApp:
                 )
             )
         return max(EXCEL_MIN_ZOOM, min(required_zoom, 100))
+
+    def _calculate_excel_print_area(
+        self, worksheet: object, used_range: object
+    ) -> tuple[str, float]:
+        first_row = int(used_range.Row)
+        first_column = int(used_range.Column)
+        row_count = int(used_range.Rows.Count)
+        column_count = int(used_range.Columns.Count)
+        last_row = first_row + row_count - 1
+        last_column = first_column + column_count - 1
+        required_extra_width = 0.0
+
+        rows_to_check = min(row_count, EXCEL_MAX_OVERFLOW_ROWS)
+        for row in range(first_row, first_row + rows_to_check):
+            cell = worksheet.Cells(row, last_column)
+            value = cell.Value2
+            if not isinstance(value, str) or not value or bool(cell.WrapText):
+                continue
+
+            cell_width = float(
+                cell.MergeArea.Width if bool(cell.MergeCells) else cell.Width
+            )
+            font_size = float(cell.Font.Size or 11)
+            rendered_width = self._estimate_excel_text_width(value, font_size)
+            required_extra_width = max(
+                required_extra_width, rendered_width - cell_width
+            )
+
+        extended_column = last_column
+        remaining_width = max(required_extra_width, 0.0)
+        added_width = 0.0
+        while remaining_width > 0 and (
+            extended_column - last_column < EXCEL_MAX_OVERFLOW_COLUMNS
+            and extended_column < 16384
+        ):
+            extended_column += 1
+            column_width = float(worksheet.Columns(extended_column).Width)
+            added_width += column_width
+            remaining_width -= column_width
+
+        if extended_column > last_column:
+            self.events.put(
+                (
+                    "log",
+                    f"シート「{worksheet.Name}」はセルからはみ出す文字を考慮し、"
+                    f"印刷範囲を右へ{extended_column - last_column}列拡張しました。",
+                )
+            )
+        if row_count > rows_to_check:
+            self.events.put(
+                (
+                    "log",
+                    f"警告: シート「{worksheet.Name}」は行数が多いため、"
+                    f"先頭{rows_to_check}行で文字のはみ出しを判定しました。",
+                )
+            )
+
+        top_left = worksheet.Cells(first_row, first_column)
+        bottom_right = worksheet.Cells(last_row, extended_column)
+        return (
+            worksheet.Range(top_left, bottom_right).Address,
+            float(used_range.Width) + added_width,
+        )
+
+    @staticmethod
+    def _estimate_excel_text_width(value: str, font_size: float) -> float:
+        # 全角文字を1文字、半角文字を約0.55文字として概算する。改行がある
+        # 場合は最も長い行だけを使用し、セル内の左右余白分を加える。
+        line_units = []
+        for line in value.expandtabs(4).splitlines() or [""]:
+            units = sum(
+                1.0
+                if unicodedata.east_asian_width(character) in {"W", "F", "A"}
+                else 0.55
+                for character in line
+            )
+            line_units.append(units)
+        return max(line_units, default=0.0) * font_size + 4.0
 
     def _log_export_retry(self, export_error: Exception) -> None:
         self.events.put(
