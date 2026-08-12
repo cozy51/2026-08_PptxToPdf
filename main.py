@@ -27,7 +27,6 @@ EXCEL_PORTRAIT = 1  # Excel: xlPortrait
 EXCEL_LANDSCAPE = 2  # Excel: xlLandscape
 EXCEL_A4 = 9  # Excel: xlPaperA4
 EXCEL_VISIBLE = -1  # Excel: xlSheetVisible
-LANDSCAPE_COLUMN_THRESHOLD = 8
 EXCEL_A4_PORTRAIT_WIDTH_POINTS = 595.28
 EXCEL_A4_LANDSCAPE_WIDTH_POINTS = 841.89
 EXCEL_DEFAULT_MARGIN_POINTS = 36.0
@@ -471,13 +470,11 @@ class PptxToPdfApp:
                             f"できませんでした。設定可能な範囲で続けます ({exc})",
                         )
                     )
-                orientation = (
-                    EXCEL_LANDSCAPE
-                    if used_range.Columns.Count > LANDSCAPE_COLUMN_THRESHOLD
-                    else EXCEL_PORTRAIT
-                )
                 print_area, print_width = self._calculate_excel_print_area(
                     worksheet, used_range
+                )
+                orientation = self._select_excel_orientation(
+                    page_setup, print_width, worksheet.Name
                 )
                 zoom = self._calculate_excel_zoom(
                     print_width, page_setup, orientation, worksheet.Name
@@ -566,6 +563,38 @@ class PptxToPdfApp:
                 )
             )
         return max(EXCEL_MIN_ZOOM, min(required_zoom, 100))
+
+    def _select_excel_orientation(
+        self, page_setup: object, content_width: float, sheet_name: str
+    ) -> int:
+        try:
+            current_orientation = int(page_setup.Orientation)
+        except Exception:
+            current_orientation = EXCEL_PORTRAIT
+
+        # 元が横向きのシートは決して縦向きへ変更しない。縦向きの場合も、
+        # 実際の印刷幅に収まらないシートだけを横向きへ変更する。
+        if current_orientation == EXCEL_LANDSCAPE:
+            return EXCEL_LANDSCAPE
+
+        try:
+            horizontal_margins = float(page_setup.LeftMargin) + float(
+                page_setup.RightMargin
+            )
+        except Exception:
+            horizontal_margins = EXCEL_DEFAULT_MARGIN_POINTS * 2
+        portrait_printable_width = max(
+            EXCEL_A4_PORTRAIT_WIDTH_POINTS - horizontal_margins, 1.0
+        )
+        if content_width > portrait_printable_width * 0.95:
+            self.events.put(
+                (
+                    "log",
+                    f"シート「{sheet_name}」は横幅が広いため、印刷方向を横向きにします。",
+                )
+            )
+            return EXCEL_LANDSCAPE
+        return EXCEL_PORTRAIT
 
     def _calculate_excel_print_area(
         self, worksheet: object, used_range: object
