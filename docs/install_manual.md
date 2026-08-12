@@ -102,6 +102,17 @@ Pythonのインストールは不要です。exeにはアプリの動作に必�
 
 配布用のexeを自分で作る場合の手順です。ビルドは**Windows 10/11のパソコン**で行ってください。他のOSではWindows用exeを作れません。
 
+### 2-0. Windows PCが無い場合
+
+GitHubのWindowsランナーでビルドすることもできます。この方法なら、手元にWindows環境やPythonが無くてもexeを入手できます。
+
+1. GitHubのリポジトリで「Actions」タブを開きます。
+2. 左側の一覧から「Build Windows exe」を選びます。
+3. 「Run workflow」をクリックし、ブランチを選んで実行します。
+4. 数分で完了します。実行結果のページ下部「Artifacts」から `OfficePdfConverter` をダウンロードすると、ZIPの中にexeとこのマニュアルのPDFが入っています。
+
+この方法を使う場合、以降の2-1から2-5は不要です。手元のパソコンでビルドする場合だけ読み進めてください。
+
 ### 2-1. 必要なもの
 
 - Windows 10 または Windows 11
