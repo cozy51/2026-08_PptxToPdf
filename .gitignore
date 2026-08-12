@@ -2,5 +2,12 @@ __pycache__/
 *.py[cod]
 .venv/
 
+# exeビルドの作業ディレクトリと成果物。
+# build\app_icon.ico や dist\OfficePdfConverter.exe などのバイナリを含むため、
+# バイナリファイルを扱えない環境で差分表示が失敗しないよう追跡対象から外す。
+/.venv-build/
+/build/
+/dist/
+
 # 利用者が差し替えたアイコン（同梱のBase64版が既定として使われる）
 /assets/app_icon.png
